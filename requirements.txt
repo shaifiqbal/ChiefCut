@@ -1,0 +1,4 @@
+# ChiefCut runtime
+streamlit>=1.40,<2
+# Tests
+pytest>=8

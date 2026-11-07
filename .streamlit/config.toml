@@ -1,0 +1,22 @@
+# ChiefCut - Streamlit settings. Keeps the app private to this computer.
+[server]
+address = "127.0.0.1"        # localhost only: other devices cannot connect
+port = 8501
+headless = false             # opens your browser automatically
+maxUploadSize = 500          # MB; larger files: use "Open from this PC"
+fileWatcherType = "none"     # saves CPU; restart ChiefCut after editing code
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false     # no telemetry
+serverAddress = "localhost"
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "dark"
+primaryColor = "#FF5A36"
+backgroundColor = "#0B0D12"
+secondaryBackgroundColor = "#161A23"
+textColor = "#E8ECF4"

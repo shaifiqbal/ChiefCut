@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+.venv/
+venv/
+.venv.installed
+
+# Media (never commit videos or generated clips)
+*.mp4
+*.mov
+*.m4v
+*.webm
+*.mkv
+*.avi
+*.part.mp4
+ChiefCut_Output/
+media/
+tmp/
+temp/
+
+# Secrets / local config
+.env
+.env.*
+.streamlit/secrets.toml
+*.key
+*.pem
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store

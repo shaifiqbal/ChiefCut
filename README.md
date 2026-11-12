@@ -4,7 +4,7 @@ Turn long videos into short clips for TikTok, YouTube Shorts and Instagram Reels
 ChiefCut runs in your web browser at `http://localhost:8501`, but **nothing is uploaded to the internet**:
 FFmpeg does all the work locally.
 
-## Features (version 0.1)
+## Features
 
 - Import a video by **upload** (up to 500 MB) or **open from this PC** (any size, read in place, never modified)
 - MP4, MOV, WebM, MKV, M4V, AVI — anything FFmpeg can decode
@@ -18,6 +18,27 @@ FFmpeg does all the work locally.
 - Progress bar, in-app playback, download button, "open folder" button
 - Never overwrites files (`clip.mp4`, `clip_2.mp4`, …); camera/GPS metadata stripped from exports
 - Recent clips history and a Settings page to change the output folder
+
+### New in version 0.2
+
+- **Several clips at once** (*Create clip → ✨ Several clips (auto)*), with four ways to choose them:
+  - **📏 Evenly spaced** — one clip from each equal part of the video (instant)
+  - **🎲 Random** — random non-overlapping moments; *Shuffle* for a new set (instant)
+  - **⚡ Smart highlights** — finds the loudest, most energetic moments and busy scenes with lots of
+    cuts, using FFmpeg measurements (fast, no AI model)
+  - **🗣️ Speech-aware AI** — transcribes speech **on your PC** with faster-whisper and picks clips that
+    open with a hook (a question, "you", "the secret"…) and start and end on whole sentences
+  - **☁️ Optional Claude judge** — sends only the *text transcript* (after you tick a consent box) to
+    Claude, which picks the best moments and writes a catchy title for each. Needs your own Anthropic
+    API key (Settings) and costs a few US cents per video.
+- Review the suggestions (thumbnail, reasons, transcript excerpt), untick any you don't want, export all.
+- **Looks**: Comic book, Pencil sketch, Pop-art, Vintage film, Noir (black & white), Vivid — applied by
+  FFmpeg during export, with a live preview.
+
+**Speed on an 8 GB i5:** evenly spaced / random are instant; smart highlights take seconds (plus a few
+minutes for scene detection on long videos); speech-aware AI takes roughly 5–15 minutes per hour of video
+with the *Base* model. The first speech-aware run downloads the model once (Tiny 75 MB, Base 145 MB,
+Small 480 MB) into `%APPDATA%\ChiefCut\models`. Transcripts are saved, so re-runs are instant.
 
 Clips are saved to `%USERPROFILE%\Documents\ChiefCut_Output` by default (OneDrive-redirected Documents
 folders are detected automatically). You can change this in **⚙️ Settings**.
@@ -109,6 +130,9 @@ phone video, WebM, MOV, an image and a fake file) and really encode clips, so th
 - Streamlit usage statistics are **disabled**. No accounts, analytics, cloud storage or paid APIs.
 - FFmpeg runs with argument lists (`shell=False`) — user input is never turned into a shell command.
 - Uploaded filenames are sanitised; output names can't escape the output folder.
+- Speech transcription runs on this PC; only the speech model itself is downloaded (once).
+- Claude is never contacted unless you saved an API key **and** ticked the consent box for that video,
+  and then receives only the transcript text. The key is stored in `%APPDATA%\ChiefCut\secrets.json`.
 - Original videos are only read. Upload copies live in `%TEMP%\chiefcut_*` and are deleted when replaced,
   when ChiefCut stops, or (after a crash) on the next start.
 
@@ -116,10 +140,17 @@ phone video, WebM, MOV, an image and a fake file) and really encode clips, so th
 
 ```
 app.py                  Streamlit interface (pages, layout, state)
+ui_auto.py              "Several clips (auto)" screen
+ui_common.py            shared interface helpers
 chiefcut/
   validation.py         timestamps, clip range checks, safe filenames and paths
   probe.py              FFprobe metadata (duration, size, rotation, audio)
   processing.py         FFmpeg trim/crop/scale/encode, progress, framing preview
+  styles.py             looks (comic, sketch, pop-art, vintage, noir, vivid) as FFmpeg filters
+  planner.py            several-clip planning (even, random) + non-overlap selection
+  analysis.py           smart highlights: loudness + scene changes
+  transcribe.py         on-PC speech transcription (faster-whisper) + sentence-aware picks
+  ai_judge.py           optional Claude picks and titles (transcript text only)
   storage.py            output folder, unique names, temp files, settings
   history.py            recent clips list (JSON in %APPDATA%\ChiefCut)
   tools.py              finds ffmpeg/ffprobe (incl. winget locations), safe subprocess
@@ -138,9 +169,19 @@ run_chiefcut.bat        double-click launcher
 | Upload over 500 MB refused | Use **Open from this PC** — it reads big files without copying them into memory |
 | Export is slow | Choose `720 × 1280` and *Fast draft* encoding while testing |
 | Output folder error | Pick another folder in **⚙️ Settings** |
+| Speech model download fails | It needs internet once. Try again, or pick the *Tiny* model |
+| Speech-aware is slow | Use the *Tiny* model, or make clips with *Smart highlights* instead |
+| Claude: "rejected the API key" / "no credit" | Check the key in Settings, or add credit at console.anthropic.com |
+
+## Updating ChiefCut
+
+Replace the files with the new version (keep nothing else). Next time you double-click
+`run_chiefcut.bat` it notices the changed `requirements.txt` and installs the new packages
+automatically (version 0.2 adds faster-whisper and the Anthropic SDK — a few minutes, once).
+Your clips, history, settings, API key and downloaded models are stored outside the ChiefCut folder
+and are kept.
 
 ## Roadmap (not built yet)
 
-Transcription (faster-whisper) and animated captions · AI highlight detection · multiple clips per video ·
-smart reframing / subject tracking · batch processing · platform presets · URL import via permitted sources ·
-hosted SaaS version.
+Animated word-by-word captions (the transcript is already there) · smart reframing / subject tracking ·
+batch processing of many videos · platform presets · hosted SaaS version.

@@ -13,6 +13,7 @@ from typing import Callable
 
 from .probe import ProbeError, VideoInfo, probe
 from .storage import finalize_no_overwrite, free_space_bytes, unique_path
+from .styles import get_look
 from .tools import CREATIONFLAGS, available_encoders, find_tool, run
 from .validation import ValidationError, validate_clip_range
 
@@ -57,6 +58,7 @@ class ClipRequest:
     aspect: AspectMode = AspectMode.VERTICAL
     size: str = "1080x1920"
     quality: str = "standard"
+    look: str = "none"
 
 
 @dataclass
@@ -108,7 +110,7 @@ def output_dimensions(info: VideoInfo, aspect: AspectMode, size: str) -> tuple[i
     return even(w), even(h)
 
 
-def build_filter(info: VideoInfo, aspect: AspectMode, size: str) -> str:
+def build_filter(info: VideoInfo, aspect: AspectMode, size: str, look: str = "none") -> str:
     """FFmpeg video filter chain. Rotation is handled by FFmpeg's autorotate,
     so the filter sees the upright (display) frame."""
     out_w, out_h = output_dimensions(info, aspect, size)
@@ -122,6 +124,9 @@ def build_filter(info: VideoInfo, aspect: AspectMode, size: str) -> str:
         chain.append(f"crop={out_w}:{out_h}")
     else:
         chain.append(f"scale={out_w}:{out_h}:flags=lanczos")
+    style = get_look(look).filter
+    if style:
+        chain.append(style)  # applied after resizing, so it costs as little as possible
     chain += ["setsar=1", "format=yuv420p"]
     return ",".join(chain)
 
@@ -156,7 +161,7 @@ def build_command(req: ClipRequest, info: VideoInfo, output: Path) -> list[str]:
     ]
     if info.has_audio:
         args += ["-map", "0:a:0?"]
-    args += ["-vf", build_filter(info, req.aspect, req.size)]
+    args += ["-vf", build_filter(info, req.aspect, req.size, req.look)]
     args += _video_codec_args(req.quality)
     if info.has_audio:
         args += ["-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "48000"]
@@ -300,12 +305,16 @@ def _friendly_ffmpeg_error(stderr: str) -> str:
 # --------------------------------------------------------------------------
 # Thumbnails (framing preview)
 # --------------------------------------------------------------------------
-def frame_preview(source: Path, info: VideoInfo, at: float, aspect: AspectMode, height: int = 360) -> bytes | None:
+def frame_preview(source: Path, info: VideoInfo, at: float, aspect: AspectMode, height: int = 360,
+                  look: str = "none") -> bytes | None:
     """A JPEG of the frame at `at` seconds, with the 9:16 crop area outlined."""
     at = max(0.0, min(at, max(0.0, info.duration - 0.1)))
     dw, dh = info.display_width, info.display_height
     w = even(height * dw / dh)
     vf = f"scale={w}:{height}"
+    style = get_look(look).filter
+    if style:
+        vf = f"{vf},{style},format=yuv420p"
     if aspect == AspectMode.VERTICAL:
         x, y, cw, ch = vertical_crop_box(w, height)
         # Dim everything, then redraw the kept area at full brightness, then outline it.

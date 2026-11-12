@@ -13,14 +13,26 @@ from pathlib import Path
 
 import streamlit as st
 
-from chiefcut import __version__, history
+from chiefcut import __version__, ai_judge, history
+from ui_common import (
+    DOWNLOAD_BUTTON_LIMIT,
+    can_open_folders,
+    duration_picker,
+    get_settings,
+    meta_grid,
+    open_folder,
+    output_dir_setting,
+    output_settings,
+    section,
+    thumbnail,
+)
+import ui_auto
 from chiefcut.probe import ProbeError, probe
 from chiefcut.processing import (
     AspectMode,
     ClipRequest,
     ProcessingError,
     create_clip,
-    frame_preview,
     output_dimensions,
 )
 from chiefcut.storage import (
@@ -30,7 +42,6 @@ from chiefcut.storage import (
     ensure_writable_dir,
     free_space_bytes,
     human_size,
-    load_settings,
     remove_temp_dir,
     save_settings,
     save_stream_to_temp,
@@ -41,10 +52,8 @@ from chiefcut.storage import (
 from chiefcut.tools import ToolNotFoundError, ffmpeg_version, find_tool
 from chiefcut.validation import (
     ALLOWED_EXTENSIONS,
-    MAX_CLIP_SECONDS,
     ValidationError,
     check_extension,
-    clean_user_path,
     format_timestamp,
     parse_timestamp,
     resolve_local_video,
@@ -53,7 +62,6 @@ from chiefcut.validation import (
 
 UPLOAD_LIMIT_MB = 500          # keep in sync with .streamlit/config.toml
 INLINE_PREVIEW_LIMIT = 250 * 1024 * 1024   # larger sources show a still frame only
-DOWNLOAD_BUTTON_LIMIT = 400 * 1024 * 1024
 LARGE_FILE_WARNING = 2 * 1024 ** 3
 
 st.set_page_config(page_title="ChiefCut", page_icon="✂️", layout="wide", initial_sidebar_state="expanded")
@@ -127,12 +135,6 @@ def _tool_status() -> tuple[bool, str]:
         return False, str(exc)
 
 
-@st.cache_data(show_spinner=False, max_entries=64)
-def _thumbnail(path: str, mtime: float, at: float, aspect: str) -> bytes | None:
-    info = probe(path)
-    return frame_preview(Path(path), info, at, AspectMode(aspect))
-
-
 # ==========================================================================
 # Session helpers
 # ==========================================================================
@@ -141,17 +143,6 @@ ss.setdefault("source", None)       # dict: path, name, is_temp, key, info
 ss.setdefault("temp_dir", None)
 ss.setdefault("last_result", None)
 ss.setdefault("local_path", "")
-
-
-def get_settings() -> dict:
-    if "settings" not in ss:
-        ss.settings = load_settings()
-    return ss.settings
-
-
-def output_dir_setting() -> Path:
-    s = get_settings()
-    return Path(s["output_dir"]) if s.get("output_dir") else default_output_dir()
 
 
 def session_temp_dir() -> Path:
@@ -189,19 +180,6 @@ def set_source(path: Path, name: str, is_temp: bool, key: str) -> None:
     ss.last_result = None
 
 
-def open_folder(path: Path) -> None:
-    if os.name == "nt":
-        os.startfile(str(path))  # noqa: S606 - local folder chosen by the user
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
-    else:
-        subprocess.Popen(["xdg-open", str(path)])
-
-
-def can_open_folders() -> bool:
-    return os.name == "nt" or sys.platform == "darwin" or bool(os.environ.get("DISPLAY"))
-
-
 def browse_for_file() -> str | None:
     """Native file picker in a helper process (works because the server is this PC)."""
     try:
@@ -215,15 +193,6 @@ def browse_for_file() -> str | None:
     if out.returncode == 0 and out.stdout:
         return out.stdout.decode("utf-8", "replace").strip()
     return None
-
-
-def meta_grid(items: list[tuple[str, str]]) -> None:
-    cells = "".join(f"<div><b>{k}</b><span>{v}</span></div>" for k, v in items)
-    st.markdown(f'<div class="cc-meta">{cells}</div>', unsafe_allow_html=True)
-
-
-def section(num: int | str, title: str) -> None:
-    st.markdown(f'<div class="cc-section"><span class="cc-step">{num}</span>{title}</div>', unsafe_allow_html=True)
 
 
 # ==========================================================================
@@ -312,7 +281,7 @@ def page_create() -> None:
                     placeholder=r'C:\Users\you\Videos\my-video.mp4   (tip: Shift + right-click → "Copy as path")',
                 )
             with c2:
-                if os.name == "nt" and st.button("Browse…", use_container_width=True):
+                if os.name == "nt" and st.button("Browse…", width="stretch"):
                     chosen = browse_for_file()
                     if chosen:
                         ss._picked_path = chosen
@@ -369,57 +338,27 @@ def page_create() -> None:
             else:
                 st.caption("Preview player disabled for very large files to save memory — see the framing preview below.")
 
+    # ---------------- Mode ----------------
+    mode = st.segmented_control(
+        "What do you want to make?", ["✂️ One clip", "✨ Several clips (auto)"],
+        default="✂️ One clip", key="mode",
+    ) or "✂️ One clip"
+    if mode.startswith("✨"):
+        ui_auto.render(src, info, src_path)
+        return
+
     # ---------------- 3. Clip settings ----------------
-    settings = get_settings()
     with st.container(border=True):
         section(3, "Clip settings")
-        c1, c2, c3 = st.columns([1.1, 1, 1.2])
+        c1, c2 = st.columns([1.1, 1])
         with c1:
-            preset = st.segmented_control(
-                "Clip duration", ["20s", "30s", "60s", "Custom"], default="30s", key="dur_preset",
-            ) or "30s"
-            if preset == "Custom":
-                duration = st.number_input(
-                    "Custom duration (seconds)", min_value=1.0, max_value=float(MAX_CLIP_SECONDS),
-                    value=min(15.0, max(1.0, float(int(info.duration)))), step=0.5, key="dur_custom",
-                )
-            else:
-                duration = float(preset.rstrip("s"))
+            duration = duration_picker(info.duration)
         with c2:
             start_text = st.text_input(
                 "Start time", value="0", key="start_text",
                 help="Seconds (75), MM:SS (1:15) or HH:MM:SS (0:01:15). Decimals allowed, e.g. 1:15.5",
             )
-        with c3:
-            aspect_label = st.radio(
-                "Format", ["Vertical 9:16 (Shorts, Reels, TikTok)", "Original aspect ratio"], key="aspect",
-            )
-        aspect = AspectMode.VERTICAL if aspect_label.startswith("Vertical") else AspectMode.ORIGINAL
-
-        c4, c5 = st.columns(2)
-        with c4:
-            if aspect == AspectMode.VERTICAL:
-                size = st.selectbox(
-                    "Output size", ["1080x1920", "720x1280"],
-                    format_func=lambda s: {"1080x1920": "1080 × 1920 (Full HD, recommended)",
-                                           "720x1280": "720 × 1280 (faster, good for testing)"}[s],
-                    key="size_v",
-                )
-            else:
-                size = st.selectbox(
-                    "Output size", ["source", "1080p", "720p"],
-                    format_func=lambda s: {"source": "Same as source",
-                                           "1080p": "Up to 1080p", "720p": "Up to 720p (faster)"}[s],
-                    key="size_o",
-                )
-        with c5:
-            quality = st.selectbox(
-                "Encoding", ["standard", "high", "fast"],
-                index=["standard", "high", "fast"].index(settings.get("quality", "standard")),
-                format_func=lambda q: {"standard": "Standard (balanced)", "high": "High quality (slower)",
-                                       "fast": "Fast draft (larger, lower quality)"}[q],
-                key="quality",
-            )
+        aspect, size, quality, look = output_settings()
 
         # Validate live.
         error = None
@@ -441,8 +380,9 @@ def page_create() -> None:
 
         # Framing preview
         if not error:
-            with st.expander("🖼️ Framing preview at start time", expanded=aspect == AspectMode.VERTICAL):
-                thumb = _thumbnail(str(src_path), src_path.stat().st_mtime, round(start, 1), aspect.value)
+            with st.expander("🖼️ Framing preview at start time",
+                             expanded=aspect == AspectMode.VERTICAL or look != "none"):
+                thumb = thumbnail(str(src_path), src_path.stat().st_mtime, round(start, 1), aspect.value, look)
                 if thumb:
                     cap = ("Highlighted area = what the 9:16 centre crop keeps." if aspect == AspectMode.VERTICAL
                            else "Full frame is kept.")
@@ -469,11 +409,13 @@ def page_create() -> None:
             )
 
         go = st.button("✂️  Create clip", type="primary", disabled=bool(error) or not out_ok,
-                       use_container_width=True)
+                       width="stretch")
         if go:
             req = ClipRequest(source=src_path, start=start, duration=duration, aspect=aspect,
-                              size=size, quality=quality)
+                              size=size, quality=quality, look=look)
             tag = f"{'vertical' if aspect == AspectMode.VERTICAL else 'original'}_{duration:g}s".replace(".", "-")
+            if look != "none":
+                tag += f"_{look}"
             name = build_output_name(src["name"], tag)
             bar = st.progress(0.0, text="Starting FFmpeg…")
 
@@ -501,6 +443,7 @@ def page_create() -> None:
                     "start": start, "duration": round(result.duration, 2),
                     "width": result.width, "height": result.height,
                     "aspect": aspect.value, "has_audio": result.has_audio, "size_bytes": result.size_bytes,
+                    "look": look,
                 }
                 history.add(entry)
                 ss.last_result = entry
@@ -535,9 +478,9 @@ def render_last_result() -> None:
             with b1:
                 if res["size_bytes"] <= DOWNLOAD_BUTTON_LIMIT:
                     st.download_button("⬇️  Download MP4", data=p.read_bytes(), file_name=p.name,
-                                       mime="video/mp4", type="primary", use_container_width=True)
+                                       mime="video/mp4", type="primary", width="stretch")
             with b2:
-                if can_open_folders() and st.button("📂  Open folder", use_container_width=True):
+                if can_open_folders() and st.button("📂  Open folder", width="stretch"):
                     open_folder(p.parent)
             st.caption("The clip is already saved in the folder above — downloading just makes another copy.")
 
@@ -576,12 +519,12 @@ def page_history() -> None:
             with b1:
                 if (e.get("size_bytes") or 0) <= DOWNLOAD_BUTTON_LIMIT:
                     st.download_button("⬇️ Download", data=p.read_bytes(), file_name=p.name, mime="video/mp4",
-                                       use_container_width=True, key=f"dl_{idx}")
+                                       width="stretch", key=f"dl_{idx}")
             with b2:
-                if can_open_folders() and st.button("📂 Open folder", use_container_width=True, key=f"of_{idx}"):
+                if can_open_folders() and st.button("📂 Open folder", width="stretch", key=f"of_{idx}"):
                     open_folder(p.parent)
             with b3:
-                if st.button("Remove from list", use_container_width=True, key=f"rm_{idx}",
+                if st.button("Remove from list", width="stretch", key=f"rm_{idx}",
                              help="Removes it from this list only — the video file is kept."):
                     history.remove(e["path"])
                     st.rerun()
@@ -591,7 +534,7 @@ def page_history() -> None:
         [{"Clip": x["name"], "Created": x.get("created", "")[:16].replace("T", " "),
           "Length (s)": x.get("duration"), "Size": f"{x.get('width')}×{x.get('height')}",
           "Source": x.get("source_name", "")} for x in entries],
-        hide_index=True, use_container_width=True,
+        hide_index=True, width="stretch",
     )
 
 
@@ -609,7 +552,7 @@ def page_settings() -> None:
         new = st.text_input("Change output folder", value="", placeholder=r"D:\Clips\ChiefCut")
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("Save folder", type="primary", disabled=not new.strip(), use_container_width=True):
+            if st.button("Save folder", type="primary", disabled=not new.strip(), width="stretch"):
                 try:
                     p = validate_output_dir_input(new)
                     s["output_dir"] = str(p)
@@ -619,7 +562,7 @@ def page_settings() -> None:
                 except ValidationError as exc:
                     st.error(str(exc))
         with c2:
-            if st.button("Reset to default", use_container_width=True):
+            if st.button("Reset to default", width="stretch"):
                 s.pop("output_dir", None)
                 save_settings(s)
                 st.rerun()
@@ -633,6 +576,31 @@ def page_settings() -> None:
             s["quality"] = q
             save_settings(s)
             st.success("Saved.")
+
+    with st.container(border=True):
+        st.markdown("**☁️ Claude API key (optional)**")
+        st.caption(
+            "Only needed for *Speech-aware AI → let Claude pick the best moments*. Get a key at "
+            "console.anthropic.com → API Keys. It is stored only on this PC, in your user profile "
+            "(not in the ChiefCut folder), and is used only when you tick the consent box."
+        )
+        src_ = ai_judge.key_source()
+        if src_:
+            st.success(f"Key set ({src_}): `{ai_judge.mask(ai_judge.get_api_key())}`")
+        new_key = st.text_input("API key", type="password", placeholder="sk-ant-…", key="api_key_input")
+        k1, k2 = st.columns(2)
+        with k1:
+            if st.button("Save key", type="primary", disabled=not new_key.strip(), width="stretch"):
+                try:
+                    ai_judge.save_api_key(new_key)
+                    st.success("Key saved.")
+                    st.rerun()
+                except ai_judge.JudgeError as exc:
+                    st.error(str(exc))
+        with k2:
+            if src_ == "saved in ChiefCut" and st.button("Delete saved key", width="stretch"):
+                ai_judge.delete_api_key()
+                st.rerun()
 
     with st.container(border=True):
         st.markdown("**System**")
@@ -661,13 +629,19 @@ def page_about() -> None:
 - Original videos are never modified, moved or deleted. Temporary copies are removed when you
   replace the video, when ChiefCut shuts down, and (if a crash left any behind) on the next start.
 - Exported clips have camera/GPS metadata stripped.
+- **Speech-aware AI** transcribes on this PC. The only download is the speech model itself (once).
+- **Claude** (optional) receives only the *text transcript*, only after you tick the consent box,
+  using your own API key.
 
 **Version 1 features:** upload or open local videos · 20/30/60s or custom clip length · start time in
 seconds or timestamps · 9:16 centre crop (1080×1920 / 720×1280) or original aspect ratio · H.264/AAC
 MP4 export · recent clips.
 
-**Not included yet:** automatic captions, AI highlight detection, subject tracking, batch export,
-URL import.
+**Version 0.2 adds:** several clips at once — evenly spaced, random, smart highlights
+(loudness + scene changes), speech-aware AI with sentence-aligned cuts, and optional Claude picks with
+titles · style looks: comic book, pencil sketch, pop-art, vintage film, noir, vivid.
+
+**Not included yet:** automatic captions, subject tracking, URL import.
             """
         )
 

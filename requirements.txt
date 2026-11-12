@@ -1,4 +1,9 @@
 # ChiefCut runtime
 streamlit>=1.40,<2
+numpy>=1.26
+# Speech-aware AI (runs on this PC; downloads a speech model once)
+faster-whisper>=1.1,<2
+# Optional Claude judge (only used with your API key and consent)
+anthropic>=2.0,<3
 # Tests
 pytest>=8

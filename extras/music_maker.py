@@ -6,7 +6,8 @@ no internet. Each --seed gives a different piece, so the music is original.
 Usage (Windows PowerShell, inside the ChiefCut folder):
     .venv\\Scripts\\python extras\\music_maker.py --minutes 10 --style chill --seed 1 --out "$HOME\\Videos\\music1.wav"
 
-Styles: chill (lo-fi), upbeat (pop), epic (cinematic), ambient (calm, no drums).
+Styles: chill (lo-fi), upbeat (pop), epic (cinematic), ambient (calm, no drums),
+rock (fast guitars and drums), hiphop (boom-bap rap beat), trap (808s and hi-hat rolls).
 Needs only numpy (already installed with ChiefCut).
 """
 
@@ -27,13 +28,18 @@ MINOR = [0, 2, 3, 5, 7, 8, 10]
 PROGS = {
     "major": [[0, 4, 5, 3], [5, 3, 0, 4], [0, 5, 3, 4], [3, 4, 0, 0], [0, 3, 5, 4], [3, 0, 4, 5]],
     "minor": [[0, 5, 2, 6], [0, 3, 6, 2], [0, 6, 5, 6], [0, 3, 4, 0], [5, 6, 0, 0], [0, 5, 3, 4]],
+    "rock":  [[0, 5, 6, 0], [0, 6, 5, 6], [0, 3, 6, 2], [0, 0, 5, 6], [5, 6, 0, 0]],
 }
 STYLES = {
     "chill":   dict(bpm=(76, 86),   mode="minor", swing=0.14, drums="lofi", bright=0.55, seventh=True),
     "upbeat":  dict(bpm=(108, 122), mode="major", swing=0.0,  drums="pop",  bright=1.0,  seventh=False),
     "epic":    dict(bpm=(86, 96),   mode="minor", swing=0.0,  drums="epic", bright=0.8,  seventh=False),
     "ambient": dict(bpm=(60, 70),   mode="major", swing=0.0,  drums=None,   bright=0.4,  seventh=True),
+    "rock":    dict(bpm=(132, 150), mode="minor", swing=0.0,  drums="rock", bright=0.9,  seventh=False),
+    "hiphop":  dict(bpm=(86, 96),   mode="minor", swing=0.18, drums="boombap", bright=0.7, seventh=True),
+    "trap":    dict(bpm=(136, 148), mode="minor", swing=0.0,  drums="trap", bright=0.8,  seventh=False),
 }
+GENRE_STYLES = ("rock", "hiphop", "trap")       # styles with their own instruments
 
 
 def mtof(m: float) -> float:
@@ -161,6 +167,149 @@ class Song:
         sig = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.exp(-tt / 0.6)
         self.add(t, (sig * vol).astype(np.float32), send=0.4)
 
+    # ---------------------------------------------------------------- rock / hip-hop instruments
+    def guitar(self, t: float, m: int, dur: float, vol: float = 0.11, palm: bool = False):
+        """Distorted power chord (root + fifth + octave), double-tracked left/right."""
+        n = int(dur * SR)
+        tt = np.arange(n, dtype=np.float32) / SR
+        sides = []
+        for detune in (0.997, 1.003):
+            sig = np.zeros(n, np.float32)
+            for note in (m - 12, m - 5, m):
+                f = mtof(note) * detune
+                for h in range(1, 10):
+                    sig += (1 / h) * np.sin(2 * np.pi * f * h * tt + h * detune)
+            sig = np.tanh(3.5 * sig)                                     # distortion
+            sig = np.convolve(sig, np.ones(5, np.float32) / 5, mode="same")  # tame the fizz
+            e = self.env(n, 0.004, 0.03) * (np.exp(-tt / 0.09) if palm else np.exp(-tt / 1.2))
+            sides.append(sig * e * vol)
+        self.add(t, sides[0], pan=-0.6, send=0.1)
+        self.add(t, sides[1], pan=0.6, send=0.1)
+
+    def crash(self, t: float, vol: float = 0.12):
+        n = int(1.6 * SR)
+        tt = np.arange(n, dtype=np.float32) / SR
+        noise = np.diff(self.rng.standard_normal(n + 1).astype(np.float32))
+        self.add(t, noise * np.exp(-tt / 0.5) * vol, pan=-0.3, send=0.3)
+
+    def sub808(self, t: float, m: int, dur: float, vol: float = 0.5, slide_from: int | None = None):
+        """Long 808 bass with a little saturation so it is audible on phone speakers."""
+        n = int(min(dur, 2.0) * SR)
+        tt = np.arange(n, dtype=np.float32) / SR
+        f_end = mtof(m - 24)
+        f_start = mtof(slide_from - 24) if slide_from is not None else f_end * 1.15
+        f = f_end + (f_start - f_end) * np.exp(-tt / (0.08 if slide_from is None else 0.15))
+        sig = np.tanh(1.8 * np.sin(2 * np.pi * np.cumsum(f) / SR))
+        e = self.env(n, 0.003, 0.08) * np.exp(-tt / 1.1)
+        self.add(t, (sig * e * vol).astype(np.float32))
+
+    def clap(self, t: float, vol: float = 0.3):
+        n = int(0.25 * SR)
+        tt = np.arange(n, dtype=np.float32) / SR
+        noise = np.diff(self.rng.standard_normal(n + 1).astype(np.float32))
+        env = np.exp(-tt / 0.07)
+        for k in (0.0, 0.011, 0.022):                                    # three quick hands
+            i = int(k * SR)
+            env[i:i + int(0.006 * SR)] += 0.6
+        self.add(t, noise * env * vol, send=0.25)
+
+    def bell(self, t: float, m: int, vol: float = 0.07, pan: float = 0.0):
+        """Dark piano/bell for rap beats (slightly inharmonic partials)."""
+        n = int(1.4 * SR)
+        tt = np.arange(n, dtype=np.float32) / SR
+        f = mtof(m + 12)
+        sig = np.zeros(n, np.float32)
+        for ratio, amp, dec in ((1, 1, 0.9), (2.0, 0.4, 0.5), (3.01, 0.25, 0.3), (4.2, 0.12, 0.2)):
+            sig += amp * np.sin(2 * np.pi * f * ratio * tt) * np.exp(-tt / dec)
+        self.add(t, sig * self.env(n, 0.002, 0.1) * vol, pan=pan, send=0.4)
+
+    def genre_bar(self, t0: float, kind: str, b: int, n_bars: int, chord_deg: int, notes: list[int], motif):
+        """One bar of rock, hip-hop or trap."""
+        beat, style = self.beat, self.style
+        root = notes[0]
+        fade = kind == "outro" and b >= n_bars - 4
+        g = 0.5 if fade else 1.0
+        fill = b == n_bars - 1
+        hum = lambda: float(self.rng.normal(0, 0.003))  # noqa: E731
+        full = kind in ("full", "groove", "outro")
+
+        if style == "rock":
+            if kind == "intro" or kind == "break":
+                self.guitar(t0, root, self.bar, vol=0.08)                 # big ringing chord
+            else:
+                for k in range(8):                                        # driving 8th-note chugs
+                    accent = k in (0, 3, 6)
+                    self.guitar(t0 + k * beat / 2, root, beat / 2, vol=0.11 if accent else 0.08, palm=not accent)
+                for k in range(8):
+                    self.bass(t0 + k * beat / 2, root, beat / 2, vol=0.24)
+            if kind == "full":
+                for off, deg, ln in motif:                                # lead riff
+                    if (b % 2) * 4 <= off < (b % 2) * 4 + 4:
+                        m = self.degree_to_midi(chord_deg + deg)
+                        self.lead(t0 + (off - (b % 2) * 4) * beat, m + 12, ln * beat * 0.9, vol=0.08)
+            if kind != "intro" or b >= 4:
+                if b == 0:
+                    self.crash(t0, 0.13 * g)
+                for k in (0, 1.5, 2, 2.5) if full else (0, 2):
+                    self.kick(t0 + k * beat + hum(), 0.8 * g)
+                for k in (1, 3):
+                    self.snare(t0 + k * beat + hum(), 0.45 * g, verb=0.3)
+                for k in range(8):
+                    self.hat(t0 + k * beat / 2 + hum(), 0.07 * g, open_=(k % 2 == 1 and kind == "full"))
+                if fill:
+                    for k in range(8):
+                        self.snare(t0 + (2 + k / 4) * beat, 0.2 + 0.03 * k, verb=0.3)
+            return
+
+        # ---- hip-hop (boom-bap) and trap
+        trap = style == "trap"
+        # Melody loop on bells/piano (always: it's the hook of a rap beat).
+        step = beat if trap else beat / 2
+        seq = notes + [notes[1] + 12]
+        pattern = [0, 2, 1, 3] if trap else [0, 1, 2, 1, 3, 1, 2, 1]
+        for k in range(int(round(self.bar / step))):
+            if kind == "break" and k % 2:
+                continue
+            self.bell(t0 + k * step, seq[pattern[k % len(pattern)] % len(seq)], vol=0.075, pan=0.2 * np.sin(k))
+        if kind in ("intro", "break"):
+            if kind == "intro" and b >= 6:
+                self.hat(t0 + 3.5 * beat, 0.05)
+            return
+        # 808 bass that follows the kick.
+        if trap:
+            kicks = [0, 0.75, 2.5] if b % 2 == 0 else [0, 1.5, 2.75, 3.25]
+            for i, k in enumerate(kicks):
+                self.kick(t0 + k * beat, 0.7 * g)
+                slide = notes[0] + 12 if (i == len(kicks) - 1 and self.rng.random() < 0.4) else None
+                self.sub808(t0 + k * beat, root, beat * 1.2, vol=0.42 * g, slide_from=slide)
+            self.clap(t0 + 2 * beat, 0.34 * g)                            # half-time clap on beat 3
+            # Hi-hats: 8ths with fast rolls (the trap signature).
+            k = 0.0
+            while k < 4:
+                roll = self.rng.random() < (0.25 if kind == "full" else 0.12)
+                if roll:
+                    sub = float(self.rng.choice([1 / 6, 1 / 8]))
+                    end = min(4.0, k + 0.5)
+                    while k < end - 1e-6:
+                        self.hat(t0 + k * beat, 0.05 * g)
+                        k += sub
+                else:
+                    self.hat(t0 + k * beat, (0.065 if k % 1 == 0 else 0.05) * g)
+                    k += 0.5
+        else:
+            sw = self.st["swing"]
+            for k in (0, 1.75, 2.5) if b % 2 == 0 else (0, 0.75, 2.5):
+                self.kick(t0 + k * beat + hum(), 0.85 * g)
+                self.sub808(t0 + k * beat, root, beat * 0.9, vol=0.3 * g)
+            for k in (1, 3):
+                self.snare(t0 + k * beat + hum(), 0.4 * g, verb=0.15)
+                self.clap(t0 + k * beat, 0.18 * g)
+            for k in range(8):
+                self.hat(t0 + (k * 0.5 + (sw if k % 2 else 0)) * beat + hum(), (0.07 if k % 2 == 0 else 0.045) * g)
+        if fill:
+            for k in range(4):
+                self.snare(t0 + (3 + k / 4) * beat, 0.15 + 0.05 * k)
+
     # ---------------------------------------------------------------- composition
     def plan_sections(self) -> list[str]:
         n_sec = max(2, self.n_bars // 8)
@@ -189,13 +338,14 @@ class Song:
 
     def compose(self, progress=None):
         sections = self.plan_sections()
-        prog = list(self.rng.choice(PROGS[self.st["mode"]]))
+        prog_key = "rock" if self.style == "rock" else self.st["mode"]
+        prog = list(self.rng.choice(PROGS[prog_key]))
         motif = self.melody(prog)
         arp_pat = int(self.rng.integers(0, 3))
         bar_i = 0
         for si, kind in enumerate(sections):
             if si % 2 == 0 and si:
-                prog = list(self.rng.choice(PROGS[self.st["mode"]]))
+                prog = list(self.rng.choice(PROGS[prog_key]))
             if kind == "full" and self.rng.random() < 0.5:
                 motif = self.melody(prog)
                 arp_pat = int(self.rng.integers(0, 3))
@@ -204,6 +354,11 @@ class Song:
                 t0 = (bar_i + b) * self.bar
                 chord_deg = prog[b % len(prog)]
                 notes = self.chord(chord_deg)
+                if self.style in GENRE_STYLES:
+                    if self.style != "rock":
+                        self.pad(t0, notes, self.bar * 1.05, vol=0.025)    # soft background chords
+                    self.genre_bar(t0, kind, b, n_bars, chord_deg, notes, motif)
+                    continue
                 self.pad(t0, notes, self.bar * 1.05, vol=0.045 if kind != "break" else 0.06)
                 if kind in ("groove", "full", "outro") or (kind == "intro" and b >= 4):
                     self.bass_line(t0, notes[0], kind)

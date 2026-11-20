@@ -177,7 +177,8 @@ run_chiefcut.bat        double-click launcher
 
 `extras/music_maker.py` composes brand-new background music from maths: no samples, no internet,
 nothing copied. Every `--seed` number gives a different piece. Styles: `chill` (lo-fi), `upbeat` (pop),
-`epic` (cinematic), `ambient` (calm, no drums). A 10-minute track takes about 30–60 seconds and
+`epic` (cinematic), `ambient` (calm, no drums), `rock` (fast guitars and drums), `hiphop`
+(boom-bap rap beat) and `trap` (808s and hi-hat rolls). These are instrumentals: no vocals. A 10-minute track takes about 30–60 seconds and
 ~600 MB of RAM.
 
 ```powershell

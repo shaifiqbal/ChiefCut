@@ -173,6 +173,24 @@ run_chiefcut.bat        double-click launcher
 | Speech-aware is slow | Use the *Tiny* model, or make clips with *Smart highlights* instead |
 | Claude: "rejected the API key" / "no credit" | Check the key in Settings, or add credit at console.anthropic.com |
 
+## Music Maker (original, royalty-free music)
+
+`extras/music_maker.py` composes brand-new background music from maths: no samples, no internet,
+nothing copied. Every `--seed` number gives a different piece. Styles: `chill` (lo-fi), `upbeat` (pop),
+`epic` (cinematic), `ambient` (calm, no drums). A 10-minute track takes about 30–60 seconds and
+~600 MB of RAM.
+
+```powershell
+cd $HOME\Documents\ChiefCut
+.venv\Scripts\python extras\music_maker.py --minutes 10 --style chill --seed 1 --out "$HOME\Videos\music1.wav"
+```
+
+Add it to a video (replaces the original sound, fades out at the end):
+
+```powershell
+ffmpeg -i "$HOME\Videos\clip1.mp4" -i "$HOME\Videos\music1.wav" -map 0:v -map 1:a -c:v copy -af "afade=t=out:st=595:d=5" -c:a aac -b:a 192k -shortest "$HOME\Videos\clip1_final.mp4"
+```
+
 ## Updating ChiefCut
 
 Replace the files with the new version (keep nothing else). Next time you double-click
